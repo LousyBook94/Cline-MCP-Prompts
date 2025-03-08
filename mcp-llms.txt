@@ -1,0 +1,405 @@
+# Model Context Protocol Documentation for LLMs (Advanced)
+
+This document provides a comprehensive guide to using the Model Context Protocol (MCP) with Large Language Models (LLMs), focusing on the Python and TypeScript SDKs.
+
+## Python SDK Guide for LLMs
+
+### Server Definition
+
+MCP servers expose tools, resources, and prompts. The `FastMCP` class simplifies server creation.
+
+```python
+from mcp.server.fastmcp import FastMCP, Image, Context
+from typing import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+
+# Create an MCP server
+mcp = FastMCP("Demo")
+
+# Add an addition tool
+@mcp.tool()
+def add(a: int, b: int) -> int:
+    """Add two numbers"""
+    return a + b
+
+# Add a dynamic greeting resource
+@mcp.resource("greeting://{name}")
+def get_greeting(name: str) -> str:
+    """Get a personalized greeting"""
+    return f"Hello, {name}!"
+
+# Example with image handling
+@mcp.tool()
+def create_thumbnail(image_path: str) -> Image:
+    """Create a thumbnail from an image"""
+    from PIL import Image as PILImage  # Import within the function
+    img = PILImage.open(image_path)
+    img.thumbnail((100, 100))
+    return Image(data=img.tobytes(), format="png")
+
+# Example using the Context object
+@mcp.tool()
+async def long_task(files: list[str], ctx: Context) -> str:
+    """Process multiple files with progress tracking"""
+    for i, file in enumerate(files):
+        ctx.info(f"Processing {file}")
+        await ctx.report_progress(i, len(files))
+        data, mime_type = await ctx.read_resource(f"file://{file}")
+    return "Processing complete"
+
+# Example Prompt
+@mcp.prompt()
+def review_code(code: str) -> str:
+    return f"Please review this code:\n\n{code}"
+
+# Example with lifespan (startup/shutdown) and dependencies
+@dataclass
+class AppContext:
+    # db: Database  # Replace with your actual DB type
+    pass
+
+@asynccontextmanager
+async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
+    """Manage application lifecycle with type-safe context"""
+    try:
+        # Initialize on startup
+        # await db.connect()
+        yield AppContext()
+    finally:
+        # Cleanup on shutdown
+        # await db.disconnect()
+        pass
+
+# Pass lifespan to server
+mcp_with_lifespan = FastMCP("My App", lifespan=app_lifespan, dependencies=["pandas", "numpy"])
+
+# Access type-safe lifespan context in tools
+@mcp_with_lifespan.tool()
+def query_db(ctx: Context) -> str:
+    """Tool that uses initialized resources"""
+    # db = ctx.request_context.lifespan_context["db"]
+    return "Database query result (placeholder)"
+
+# You can install and run this server using the MCP CLI (see below)
+```
+
+**Key Points about Server Descriptions:**
+
+*   **`name`**: A unique identifier.
+*   **`description`**:  A human-readable description.  Be clear, concise, and explain the purpose and functionality.  Docstrings are automatically used for `@mcp.tool()` and `@mcp.resource()`.
+*   **Type Hints (Python):**  Use type hints to define input and output types.  FastMCP converts these to JSON schema.
+*   **`@mcp.resource("uri_template")`**:  Defines a resource with a URI template (e.g., `greeting://{name}`).
+*   **`@mcp.tool()`**: Defines a tool.
+*   **`@mcp.prompt()`:** Defines prompt.
+*   **`Context`:** Access to MCP capabilities (e.g., `ctx.info()`, `ctx.report_progress()`, `ctx.read_resource()`).
+*   **`lifespan`:** Manage startup and shutdown events.
+*   **`dependencies`:** Specifies required Python packages.
+
+### Tool and Resource Descriptions (Best Practices)
+
+*   **Be Explicit:**  Explain everything clearly.
+*   **Use Examples:** Include brief examples.
+*   **Error Handling:** Mention potential errors.
+*   **Relationships:** Describe interactions between tools/resources.
+
+### Running and Testing (Python)
+
+The `mcp` CLI tool is used for running and interacting with servers:
+
+*   **Development Mode (with MCP Inspector):**
+
+    ```bash
+    mcp dev server.py
+    # Add dependencies
+    mcp dev server.py --with pandas --with numpy
+    # Mount local code
+    mcp dev server.py --with-editable .
+    ```
+
+*   **Claude Desktop Integration:**
+
+    ```bash
+    mcp install server.py
+    # Custom name
+    mcp install server.py --name "My Analytics Server"
+    # Environment variables
+    mcp install server.py -v API_KEY=abc123 -v DB_URL=postgres://...
+    mcp install server.py -f .env
+    ```
+
+*   **Direct Execution:**
+
+    ```python
+    from mcp.server.fastmcp import FastMCP
+
+    mcp = FastMCP("My App")
+
+    if __name__ == "__main__":
+        mcp.run()
+    ```
+
+    ```bash
+    python server.py  # or  mcp run server.py
+    ```
+
+### Example: SQLite Explorer (Python)
+
+```python
+from mcp.server.fastmcp import FastMCP
+import sqlite3
+
+mcp = FastMCP("SQLite Explorer")
+
+@mcp.resource("schema://main")
+def get_schema() -> str:
+    """Provide the database schema as a resource"""
+    conn = sqlite3.connect("database.db")  # Ensure database.db exists
+    schema = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table'"
+    ).fetchall()
+    conn.close()
+    return "\n".join(sql[0] for sql in schema if sql[0])
+
+@mcp.tool()
+def query_data(sql: str) -> str:
+    """Execute SQL queries safely"""
+    conn = sqlite3.connect("database.db")  # Ensure database.db exists
+    try:
+        result = conn.execute(sql).fetchall()
+        return "\n".join(str(row) for row in result)
+    except Exception as e:
+        return f"Error: {str(e)}"
+    finally:
+        conn.close()
+```
+
+### Low-Level Server (Python)
+
+For maximum control, use the low-level `Server` class:
+
+```python
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+from mcp.server.lowlevel import Server
+import mcp.server.stdio
+import mcp.types as types
+
+@asynccontextmanager
+async def server_lifespan(server: Server) -> AsyncIterator[dict]:
+    """Manage server startup and shutdown lifecycle."""
+    try:
+        print("Server starting up...")
+        yield {}
+    finally:
+        print("Server shutting down...")
+
+server = Server("example-server", lifespan=server_lifespan)
+
+@server.call_tool()
+async def query_db(name: str, arguments: dict) -> list:
+    # Example query (replace with your actual logic)
+    return [{"result": "example data"}]
+
+@server.list_prompts()
+async def handle_list_prompts() -> list[types.Prompt]:
+    return [types.Prompt(name="example-prompt", description="An example prompt template", arguments=[types.PromptArgument(name="arg1", description="Example argument", required=True)])]
+
+@server.get_prompt()
+async def handle_get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptResult:
+    if name != "example-prompt":
+        raise ValueError(f"Unknown prompt: {name}")
+    return types.GetPromptResult(description="Example prompt", messages=[types.PromptMessage(role="user", content=types.TextContent(type="text", text="Example prompt text"))])
+
+async def run():
+    async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
+        await server.run(read_stream, write_stream, types.InitializationOptions(server_name="example", server_version="0.1.0", capabilities=server.get_capabilities(notification_options=types.NotificationOptions(), experimental_capabilities={})))
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(run())
+```
+
+### Writing MCP Clients (Python)
+
+```python
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+import mcp.types as types
+
+server_params = StdioServerParameters(command="python", args=["example_server.py"], env=None)
+
+async def handle_sampling_message(message: types.CreateMessageRequestParams) -> types.CreateMessageResult:
+    return types.CreateMessageResult(role="assistant", content=types.TextContent(type="text", text="Hello, world! from model"), model="gpt-3.5-turbo", stopReason="endTurn")
+
+async def run():
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write, sampling_callback=handle_sampling_message) as session:
+            await session.initialize()
+            prompts = await session.list_prompts()
+            print(f"Prompts: {prompts}")
+            prompt = await session.get_prompt("example-prompt", arguments={"arg1": "value"})
+            print(f"Prompt: {prompt}")
+            resources = await session.list_resources()
+            print(f"Resources: {resources}")
+            tools = await session.list_tools()
+            print(f"Tools: {tools}")
+            # Example call, replace with valid tool and arguments
+            result = await session.call_tool("tool-name", arguments={"arg1": "value"})
+            print(f"Tool Result: {result}")
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(run())
+```
+
+## TypeScript SDK Guide for LLMs
+
+### Installation
+
+```bash
+npm install @modelcontextprotocol/sdk
+```
+
+### Quickstart (TypeScript)
+
+```typescript
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "Demo", version: "1.0.0" });
+
+server.tool("add", { a: z.number(), b: z.number() }, async ({ a, b }) => ({ content: [{ type: "text", text: String(a + b) }] }));
+
+server.resource("greeting", new ResourceTemplate("greeting://{name}", { list: undefined }), async (uri, { name }) => ({ contents: [{ uri: uri.href, text: `Hello, ${name}!` }] }));
+
+const transport = new StdioServerTransport();
+await server.connect(transport);
+```
+
+### Running Your Server (TypeScript)
+
+*   **stdio:**
+
+    ```typescript
+    import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+    import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+
+    const server = new McpServer({ name: "example-server", version: "1.0.0" });
+    // ... set up server ...
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    ```
+
+*   **HTTP with SSE:**
+
+    ```typescript
+    import express from "express";
+    import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+    import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+
+    const server = new McpServer({ name: "example-server", version: "1.0.0" });
+    // ... set up server ...
+    const app = express();
+    app.use(express.json());
+
+    let transport: SSEServerTransport;
+
+    app.get("/sse", async (req, res) => {
+        transport = new SSEServerTransport("/messages", res);
+        await server.connect(transport);
+    });
+
+    app.post("/messages", async (req, res) => {
+        if (transport) {
+          await transport.handlePostMessage(req, res);
+        } else {
+          res.status(503).send("SSE connection not established");
+        }
+    });
+
+    app.listen(3001);
+    ```
+
+### Low-Level Server (TypeScript)
+
+```typescript
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { ListPromptsRequestSchema, GetPromptRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+
+const server = new Server({ name: "example-server", version: "1.0.0" }, { capabilities: { prompts: {} } });
+
+server.setRequestHandler(ListPromptsRequestSchema, async () => ({ prompts: [{ name: "example-prompt", description: "An example prompt template", arguments: [{ name: "arg1", description: "Example argument", required: true }] }] }));
+
+server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+    if (request.params.name !== "example-prompt") {
+        throw new Error("Unknown prompt");
+    }
+    return { description: "Example prompt", messages: [{ role: "user", content: { type: "text", text: "Example prompt text" } }] };
+});
+
+const transport = new StdioServerTransport();
+await server.connect(transport);
+```
+
+### Writing MCP Clients (TypeScript)
+
+```typescript
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
+const transport = new StdioClientTransport({ command: "node", args: ["server.js"] }); // Replace with your server command
+
+const client = new Client({ name: "example-client", version: "1.0.0" }, { capabilities: { prompts: {}, resources: {}, tools: {} } });
+
+await client.connect(transport);
+
+const prompts = await client.listPrompts();
+console.log("Prompts:", prompts);
+const prompt = await client.getPrompt("example-prompt", { arg1: "value" });
+console.log("Prompt:", prompt);
+const resources = await client.listResources();
+console.log("Resources:", resources);
+// Example call, replace with valid details.
+const result = await client.callTool({ name: "example-tool", arguments: { arg1: "value" } });
+console.log("Tool Result:", result);
+```
+
+## General MCP Concepts
+
+### MCP Primitives
+
+| Primitive | Control             | Description                                                   | Example Use                      |
+| :-------- | :------------------ | :------------------------------------------------------------ | :------------------------------- |
+| Prompts   | User-controlled      | Interactive templates invoked by user choice.                | Slash commands, menu options     |
+| Resources | Application-controlled | Contextual data managed by the client application.          | File contents, API responses    |
+| Tools     | Model-controlled      | Functions exposed to the LLM to take actions.               | API calls, data updates          |
+
+### Server Capabilities
+
+| Capability | Feature Flag             | Description                    |
+| :--------- | :----------------------- | :----------------------------- |
+| `prompts`  | `listChanged`            | Prompt template management      |
+| `resources` | `subscribe`<br/>`listChanged` | Resource exposure and updates  |
+| `tools`    | `listChanged`            | Tool discovery and execution    |
+| `logging`  | -                        | Server logging configuration   |
+| `completion` | -                        | Argument completion suggestions |
+
+## Documentation and Resources
+
+*   **Model Context Protocol documentation:** [https://modelcontextprotocol.io](https://modelcontextprotocol.io)
+*   **MCP Specification:** [https://spec.modelcontextprotocol.io](https://spec.modelcontextprotocol.io)
+*   **Example Servers:** [https://github.com/modelcontextprotocol/servers](https://github.com/modelcontextprotocol/servers)
+*   **Python SDK PyPI:** [https://pypi.org/project/mcp/](https://pypi.org/project/mcp/)
+*   **TypeScript SDK NPM:**  `npm install @modelcontextprotocol/sdk`
+*   **GitHub Discussions (Python SDK):** [https://github.com/modelcontextprotocol/python-sdk/discussions](https://github.com/modelcontextprotocol/python-sdk/discussions)
+
+## Contributing
+
+Contributions are welcome!  See the `CONTRIBUTING.md` file in the respective SDK repositories.
+
+## License
+
+MIT License. See the `LICENSE` file in the respective SDK repositories.
