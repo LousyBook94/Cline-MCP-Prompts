@@ -14,24 +14,34 @@ Make sure you've got:
 - Visual Studio Code - Because we're fancy like that 💅
 - Terminal access:
   - Windows: PowerShell
-  - Mac/Linux: Bash
+  - Mac/Linux: Bash/Zsh
 - Oh yeah also a high context length model. :] ✨
 
 ## 🎮 Let's Get Started!
 
 1. Grab this repo (download or clone, you do you!)
 2. Give the folder your server's awesome name
-3. Clean up the repo stuff:
+3. Clean up the repo stuff by running ONE of these (based on your OS/terminal):
 
-   Windows (PowerShell):
-   ```powershell
-   Del .git -Force -Recurse && Del README.md -Force
-   ```
+   Windows:
+   clean.ps1
    
-   Mac/Linux (Terminal):
-   ```bash
-   rm -rf .git README.md
-   ```
+   Mac/Linux:
+   clean.sh
+
+   Mac:
+   clean.zsh
+
+   Or manually:
+      Mac/Linux:
+      ```bash/zsh
+      rm -rf .git README.md clean.ps1 clean.sh clean.zsh
+      ```
+
+      Windows:
+      ```powershell
+      Del .git -Force -Recurse && Del README.md -Force
+      ```
 
 4. Pop it open in VSCode
 5. Prompt Cline/Roo Code to work its magic! :] ✨
